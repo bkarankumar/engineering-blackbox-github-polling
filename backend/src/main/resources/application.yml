@@ -1,0 +1,20 @@
+server:
+  port: ${PORT:8080}
+
+spring:
+  application:
+    name: engineering-blackbox
+  web:
+    resources:
+      cache:
+        period: 0
+
+github:
+  api-url: "https://api.github.com"
+  token: ${GITHUB_TOKEN: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}
+  repositories: "sky-uk/sky-id-digital-identity-manager-service,sky-uk/sky-id-notification-service,sky-uk/sky-id-external-ui-service,sky-uk/sky-id-session-service,sky-uk/sky-id-authentication-service"
+  polling-interval-ms: ${GITHUB_POLLING_INTERVAL_MS:180000}
+  initial-events-per-repository: ${GITHUB_INITIAL_EVENTS:30}
+
+blackbox:
+  max-events: ${BLACKBOX_MAX_EVENTS:500}

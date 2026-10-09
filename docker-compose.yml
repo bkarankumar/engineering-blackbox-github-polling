@@ -1,0 +1,14 @@
+services:
+  engineering-blackbox:
+    build: .
+    container_name: engineering-blackbox
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: 8080
+      GITHUB_API_URL: ${GITHUB_API_URL:-https://api.github.com}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_REPOSITORIES: ${GITHUB_REPOSITORIES}
+      GITHUB_POLLING_INTERVAL_MS: ${GITHUB_POLLING_INTERVAL_MS:-10000}
+      GITHUB_INITIAL_EVENTS: ${GITHUB_INITIAL_EVENTS:-30}
+    restart: unless-stopped
