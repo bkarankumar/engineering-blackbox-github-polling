@@ -9,7 +9,7 @@ A local-first Innovation Day dashboard that shows what is changing across your e
                             ▲
                             │ REST API
                             │
-                  every 10 seconds
+                  every 3 minutes (configurable)
                             │
                     ┌───────┴────────┐
                     │   Spring Boot  │
@@ -32,7 +32,6 @@ The application keeps the latest events in memory (default 500) and streams new 
 The poller reads GitHub repository Events and maps these event types:
 
 - Pull requests: opened, merged
-- GitHub Actions workflow runs (when exposed by the repository events API)
 
 No PostgreSQL, Redis, Kafka, webhook endpoint, tunnel, or public URL is required for the local MVP.
 
@@ -57,47 +56,14 @@ GITHUB_POLLING_INTERVAL_MS=10000
 GITHUB_INITIAL_EVENTS=30
 ```
 
-## Run locally
+`GITHUB_POLLING_INTERVAL_MS` is optional. If not set, the backend defaults to polling every 3 minutes (`180000` ms).
 
-### Backend
+## Run locally
 
 ```bash
 cd backend
 export GITHUB_TOKEN="github_pat_..."
 export GITHUB_REPOSITORIES="your-org/identity-service,your-org/billing-service"
-./gradlew bootRun
-```
-
-### Frontend during development
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Open the Vite URL shown by the terminal. The Vite config proxies `/api` to Spring Boot on port 8080.
-
-### Single host / port
-
-Build React first:
-
-```bash
-cd frontend
-npm install
-npm run build
-```
-
-Copy the build into Spring Boot static resources:
-
-```bash
-cp -r dist/. ../backend/src/main/resources/static/
-```
-
-Then:
-
-```bash
-cd ../backend
 ./gradlew bootRun
 ```
 
@@ -123,7 +89,7 @@ http://localhost:8080
 
 ## API
 
-- `GET /api/activities?limit=100`
+- `GET /api/activities?limit=<n>` — returns the latest activities, default `limit=6`
 - `GET /api/stream/activities` — SSE stream
 - `GET /api/status`
 - `DELETE /api/activities`

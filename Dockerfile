@@ -16,11 +16,11 @@ FROM gradle:8.14-jdk17 AS backend-build
 WORKDIR /workspace
 
 COPY backend/ ./backend/
-COPY --from=frontend-build /frontend/dist ./frontend/dist
+COPY --from=frontend-build /frontend/dist ./backend/src/main/resources/static
 
 WORKDIR /workspace/backend
 
-RUN mkdir -p src/main/resources/static     && cp -r ../frontend/dist/. src/main/resources/static/     && gradle clean bootJar --no-daemon
+RUN gradle clean bootJar --no-daemon -x buildFrontend
 
 
 # ---------- Runtime ----------
