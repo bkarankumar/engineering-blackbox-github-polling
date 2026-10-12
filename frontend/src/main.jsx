@@ -416,9 +416,15 @@ function limitPullRequestActivities(items) {
         opened: 0,
         merged: 0
     };
+    const seenPullRequests = new Set();
 
     return items.filter(activity => {
         if (activity.type !== "PULL_REQUEST") {
+            return false;
+        }
+
+        const pullRequestKey = getPullRequestKey(activity);
+        if (!pullRequestKey || seenPullRequests.has(pullRequestKey)) {
             return false;
         }
 
@@ -430,14 +436,35 @@ function limitPullRequestActivities(items) {
             return false;
         }
 
+        seenPullRequests.add(pullRequestKey);
         counts[activity.action] += 1;
         return true;
     });
 }
 
 function mergeActivity(items, nextActivity) {
-    const withoutDuplicate = items.filter(item => item.id !== nextActivity.id);
+    const nextPullRequestKey = getPullRequestKey(nextActivity);
+    const withoutDuplicate = items.filter(item => {
+        if (item.id === nextActivity.id) {
+            return false;
+        }
+
+        return !nextPullRequestKey || getPullRequestKey(item) !== nextPullRequestKey;
+    });
+
     return limitPullRequestActivities([nextActivity, ...withoutDuplicate]);
+}
+
+function getPullRequestKey(activity) {
+    if (!activity || activity.type !== "PULL_REQUEST" || !activity.pullRequestNumber) {
+        return null;
+    }
+
+    return [
+        activity.organization ?? "",
+        activity.repository ?? "",
+        activity.pullRequestNumber
+    ].join("#");
 }
 
 function formatTime(value) {

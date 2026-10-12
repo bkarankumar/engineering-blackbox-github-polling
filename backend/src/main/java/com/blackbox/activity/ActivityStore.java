@@ -25,6 +25,10 @@ public class ActivityStore {
     }
 
     public void add(Activity activity) {
+        if (activity.type() == ActivityType.PULL_REQUEST) {
+            activities.removeIf(existing -> isSamePullRequest(existing, activity));
+        }
+
         activities.addFirst(activity);
         trimPullRequests("opened", MAX_PULL_REQUESTS_PER_ACTION);
         trimPullRequests("merged", MAX_PULL_REQUESTS_PER_ACTION);
@@ -70,5 +74,18 @@ public class ActivityStore {
 
     public void clear() {
         activities.clear();
+    }
+
+    private boolean isSamePullRequest(Activity left, Activity right) {
+        return left.type() == ActivityType.PULL_REQUEST
+                && right.type() == ActivityType.PULL_REQUEST
+                && left.pullRequestNumber() != null
+                && left.pullRequestNumber().equals(right.pullRequestNumber())
+                && same(left.organization(), right.organization())
+                && same(left.repository(), right.repository());
+    }
+
+    private boolean same(String left, String right) {
+        return left == null ? right == null : left.equals(right);
     }
 }
