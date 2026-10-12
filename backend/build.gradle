@@ -31,7 +31,13 @@ tasks.named('test') {
     useJUnitPlatform()
 }
 
+tasks.register('installFrontendDeps', Exec) {
+    workingDir '../frontend'
+    commandLine 'npm', 'ci'
+}
+
 tasks.register('buildFrontend', Exec) {
+    dependsOn 'installFrontendDeps'
     workingDir '../frontend'
     commandLine 'npm', 'run', 'build'
 }
