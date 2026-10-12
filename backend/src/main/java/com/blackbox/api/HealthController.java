@@ -2,6 +2,8 @@ package com.blackbox.api;
 
 import com.blackbox.activity.ActivityStore;
 import com.blackbox.activity.ActivityStream;
+import com.blackbox.github.GitHubPollingService;
+import com.blackbox.github.RepositoryBuildStatus;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,6 +21,7 @@ public class HealthController {
 
     private final ActivityStore store;
     private final ActivityStream stream;
+    private final GitHubPollingService gitHubPollingService;
 
     @Value("${github.repositories:}")
     private String repositories;
@@ -38,6 +41,11 @@ public class HealthController {
                 .filter(value -> !value.isBlank())
                 .toList();
 
+        List<RepositoryBuildStatus> repositoryBuildStatuses = gitHubPollingService.getRepositoryBuildStatuses();
+        List<RepositoryBuildStatus> failingBuildStatuses = repositoryBuildStatuses.stream()
+                .filter(RepositoryBuildStatus::failing)
+                .toList();
+
         return Map.of(
                 "status", "UP",
                 "mode", "github-pr-polling",
@@ -45,7 +53,9 @@ public class HealthController {
                 "connectedDashboards", stream.connectedClients(),
                 "configuredRepositories", configuredRepositories,
                 "pollingIntervalMs", pollingIntervalMs,
-                "pullRequestsPerRepository", pullRequestsPerRepository
+                "pullRequestsPerRepository", pullRequestsPerRepository,
+                "repositoryBuildStatuses", repositoryBuildStatuses,
+                "failingBuildStatuses", failingBuildStatuses
         );
     }
 }

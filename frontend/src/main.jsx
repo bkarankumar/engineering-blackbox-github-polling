@@ -44,11 +44,16 @@ function App() {
         return () => source.close();
     }, []);
 
+    useEffect(() => {
+        const intervalId = window.setInterval(() => {
+            loadStatusOnly();
+        }, 30000);
+
+        return () => window.clearInterval(intervalId);
+    }, []);
+
     async function loadInitialActivities() {
-        const [activitiesResponse, statusResponse] = await Promise.all([
-            fetch("/api/activities?limit=500"),
-            fetch("/api/status")
-        ]);
+        const activitiesResponse = await fetch("/api/activities?limit=500");
 
         if (activitiesResponse.ok) {
             setActivities(limitPullRequestActivities(
@@ -56,12 +61,18 @@ function App() {
             ));
         }
 
+        await loadStatusOnly();
+    }
+
+    async function loadStatusOnly() {
+        const statusResponse = await fetch("/api/status");
         if (statusResponse.ok) {
             setStatus(await statusResponse.json());
         }
     }
 
     const configuredRepositories = status?.configuredRepositories ?? [];
+    const failingBuildStatuses = status?.failingBuildStatuses ?? [];
 
     const repositories = useMemo(
         () => [...new Set([
@@ -136,6 +147,48 @@ function App() {
                     <strong>1 / 1</strong>
                     <span>1 open / 1 merged per repo</span>
                 </div>
+            </section>
+
+            <section className={`pipeline-summary ${failingBuildStatuses.length ? "failing" : "healthy"}`}>
+                <div className="pipeline-summary-header">
+                    <span className="hero-label">MAIN PIPELINE STATUS</span>
+                    <strong>
+                        {failingBuildStatuses.length
+                            ? `${failingBuildStatuses.length} failing repo${failingBuildStatuses.length === 1 ? "" : "s"}`
+                            : "All default-branch pipelines passing"}
+                    </strong>
+                </div>
+
+                {failingBuildStatuses.length ? (
+                    <div className="pipeline-summary-list">
+                        {failingBuildStatuses.map(buildStatus => {
+                            const repositoryName = `${buildStatus.organization}/${buildStatus.repository}`;
+                            const workflowLabel = buildStatus.workflowName || "Latest workflow run";
+
+                            return buildStatus.url ? (
+                                <a
+                                    key={repositoryName}
+                                    className="pipeline-chip"
+                                    href={buildStatus.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                >
+                                    <span>{repositoryName}</span>
+                                    <span>{workflowLabel}</span>
+                                </a>
+                            ) : (
+                                <span key={repositoryName} className="pipeline-chip">
+                                    <span>{repositoryName}</span>
+                                    <span>{workflowLabel}</span>
+                                </span>
+                            );
+                        })}
+                    </div>
+                ) : (
+                    <p className="pipeline-summary-empty">
+                        The latest completed workflow run on each repository&apos;s default branch is healthy.
+                    </p>
+                )}
             </section>
 
             <section className="filters">

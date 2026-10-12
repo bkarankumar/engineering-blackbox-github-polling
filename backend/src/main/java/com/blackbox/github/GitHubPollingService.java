@@ -36,6 +36,8 @@ public class GitHubPollingService {
     /** Last emitted PR snapshot keyed by owner/repo#number. */
     private final Map<String, String> lastPublishedPullRequestState = new ConcurrentHashMap<>();
     private final Map<String, String> commitMessagesBySha = new ConcurrentHashMap<>();
+    private final Map<String, String> defaultBranchByRepository = new ConcurrentHashMap<>();
+    private final Map<String, RepositoryBuildStatus> repositoryBuildStatuses = new ConcurrentHashMap<>();
 
     public GitHubPollingService(
             ObjectMapper objectMapper,
@@ -91,6 +93,7 @@ public class GitHubPollingService {
             List<Activity> activities = new ArrayList<>();
             activities.addAll(fetchPullRequests(owner, repo, "open"));
             activities.addAll(fetchPullRequests(owner, repo, "closed"));
+            refreshRepositoryBuildStatus(owner, repo);
 
             activities.sort(Comparator.comparing(
                     Activity::occurredAt,
@@ -143,6 +146,12 @@ public class GitHubPollingService {
         }
 
         return activities;
+    }
+
+    public List<RepositoryBuildStatus> getRepositoryBuildStatuses() {
+        return repositoryBuildStatuses.values().stream()
+                .sorted(Comparator.comparing(status -> status.organization() + "/" + status.repository()))
+                .toList();
     }
 
     private void processPullRequest(Activity activity) {
@@ -202,6 +211,102 @@ public class GitHubPollingService {
                 null,
                 "Pull request " + action,
                 occurredAt);
+    }
+
+    private void refreshRepositoryBuildStatus(String owner, String repository) {
+        String repositoryKey = owner + "/" + repository;
+
+        try {
+            String defaultBranch = defaultBranchByRepository.computeIfAbsent(
+                    repositoryKey,
+                    ignored -> fetchDefaultBranch(owner, repository)
+            );
+
+            if (defaultBranch == null || defaultBranch.isBlank()) {
+                return;
+            }
+
+            String response = client.get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/repos/{owner}/{repo}/actions/runs")
+                            .queryParam("branch", defaultBranch)
+                            .queryParam("status", "completed")
+                            .queryParam("per_page", 1)
+                            .build(owner, repository))
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode workflowRuns = objectMapper.readTree(response).path("workflow_runs");
+            RepositoryBuildStatus buildStatus = workflowRuns.isArray() && !workflowRuns.isEmpty()
+                    ? mapBuildStatus(owner, repository, defaultBranch, workflowRuns.get(0))
+                    : new RepositoryBuildStatus(
+                            owner,
+                            repository,
+                            defaultBranch,
+                            null,
+                            "completed",
+                            "unknown",
+                            null,
+                            null,
+                            false
+                    );
+
+            repositoryBuildStatuses.put(repositoryKey, buildStatus);
+        } catch (RestClientResponseException ex) {
+            log.debug(
+                    "Unable to fetch workflow status for {}/{}: HTTP {} {}",
+                    owner,
+                    repository,
+                    ex.getStatusCode().value(),
+                    ex.getStatusText()
+            );
+        } catch (Exception ex) {
+            log.debug(
+                    "Unable to fetch workflow status for {}/{}: {}",
+                    owner,
+                    repository,
+                    ex.getMessage()
+            );
+        }
+    }
+
+    private String fetchDefaultBranch(String owner, String repository) {
+        try {
+            String response = client.get()
+                    .uri("/repos/{owner}/{repo}", owner, repository)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode repo = objectMapper.readTree(response);
+            return text(repo, "default_branch");
+        } catch (Exception ex) {
+            log.debug("Unable to fetch default branch for {}/{}: {}", owner, repository, ex.getMessage());
+            return null;
+        }
+    }
+
+    private RepositoryBuildStatus mapBuildStatus(String owner, String repository, String defaultBranch, JsonNode workflowRun) {
+        String status = text(workflowRun, "status");
+        String conclusion = text(workflowRun, "conclusion");
+
+        return new RepositoryBuildStatus(
+                owner,
+                repository,
+                defaultBranch,
+                text(workflowRun, "name"),
+                status,
+                conclusion,
+                text(workflowRun, "html_url"),
+                instant(text(workflowRun, "updated_at")),
+                isFailingConclusion(conclusion)
+        );
+    }
+
+    private boolean isFailingConclusion(String conclusion) {
+        return "failure".equalsIgnoreCase(conclusion)
+                || "startup_failure".equalsIgnoreCase(conclusion)
+                || "timed_out".equalsIgnoreCase(conclusion)
+                || "action_required".equalsIgnoreCase(conclusion);
     }
 
     private String fetchCommitMessage(String owner, String repository, String sha) {

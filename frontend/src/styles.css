@@ -121,6 +121,65 @@ h1 {
     font-size: 11px;
 }
 
+.pipeline-summary {
+    margin-top: 18px;
+    border: 1px solid #202838;
+    border-radius: 14px;
+    padding: 18px 20px;
+    background: #0c1018;
+}
+
+.pipeline-summary.failing {
+    border-color: #6b3543;
+    background: linear-gradient(180deg, rgba(80, 22, 34, 0.22), rgba(12, 16, 24, 1));
+}
+
+.pipeline-summary.healthy {
+    border-color: #264638;
+    background: linear-gradient(180deg, rgba(18, 58, 41, 0.18), rgba(12, 16, 24, 1));
+}
+
+.pipeline-summary-header {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.pipeline-summary-header strong {
+    font-size: 19px;
+}
+
+.pipeline-summary-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.pipeline-chip {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 220px;
+    padding: 10px 12px;
+    border: 1px solid #6b3543;
+    border-radius: 10px;
+    color: #f7c7d0;
+    background: rgba(74, 19, 31, 0.34);
+    text-decoration: none;
+}
+
+.pipeline-chip span:last-child {
+    color: #d8aab5;
+    font-size: 11px;
+}
+
+.pipeline-summary-empty {
+    margin: 12px 0 0;
+    color: #93cda9;
+    font-size: 12px;
+}
+
 .filters {
     display: flex;
     gap: 10px;

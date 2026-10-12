@@ -33,6 +33,7 @@ The poller reads GitHub Pull Request APIs and maps these pull request states:
 
 - Pull requests: opened, merged
 - Head commit message for each displayed PR
+- Latest completed default-branch workflow run per repository, with failing repos highlighted in the dashboard
 
 No PostgreSQL, Redis, Kafka, webhook endpoint, tunnel, or public URL is required for the local MVP.
 
