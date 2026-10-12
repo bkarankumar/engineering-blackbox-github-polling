@@ -52,7 +52,7 @@ Edit `.env`:
 ```dotenv
 GITHUB_TOKEN=github_pat_...
 GITHUB_REPOSITORIES=your-org/identity-service,your-org/billing-service,your-org/customer-service
-GITHUB_POLLING_INTERVAL_MS=10000
+GITHUB_POLLING_INTERVAL_MS=180000
 GITHUB_INITIAL_EVENTS=30
 ```
 
