@@ -19,7 +19,6 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -32,10 +31,10 @@ public class GitHubPollingService {
     private final ActivityStore activityStore;
     private final ActivityStream activityStream;
     private final List<String> repositories;
-    private final int initialEventsPerRepository;
+    private final int pullRequestsPerRepository;
 
-    /** GitHub event IDs already emitted by this process. */
-    private final Set<String> seenEventIds = ConcurrentHashMap.newKeySet();
+    /** Last emitted PR snapshot keyed by owner/repo#number. */
+    private final Map<String, String> lastPublishedPullRequestState = new ConcurrentHashMap<>();
     private final Map<String, String> commitMessagesBySha = new ConcurrentHashMap<>();
 
     public GitHubPollingService(
@@ -45,12 +44,12 @@ public class GitHubPollingService {
             @Value("${github.api-url:https://api.github.com}") String apiUrl,
             @Value("${github.token:}") String token,
             @Value("${github.repositories:}") String repositoryConfig,
-            @Value("${github.initial-events-per-repository:30}") int initialEventsPerRepository) {
+            @Value("${github.pull-requests-per-repository:30}") int pullRequestsPerRepository) {
 
         this.objectMapper = objectMapper;
         this.activityStore = activityStore;
         this.activityStream = activityStream;
-        this.initialEventsPerRepository = initialEventsPerRepository;
+        this.pullRequestsPerRepository = pullRequestsPerRepository;
         this.repositories = parseRepositories(repositoryConfig);
 
         RestClient.Builder builder = RestClient.builder()
@@ -65,7 +64,7 @@ public class GitHubPollingService {
         this.client = builder.build();
     }
 
-    @Scheduled(fixedDelayString = "${github.polling-interval-ms:10000}", initialDelay = 2000)
+    @Scheduled(fixedDelayString = "${github.polling-interval-ms:180000}", initialDelay = 2000)
     public void pollGitHub() {
         if (repositories.isEmpty()) {
             log.warn("GitHub polling is disabled: GITHUB_REPOSITORIES is empty");
@@ -89,30 +88,17 @@ public class GitHubPollingService {
             String owner = parts[0];
             String repo = parts[1];
 
-            String response = client.get()
-                .uri(uriBuilder -> uriBuilder
-                    .path("/repos/{owner}/{repo}/events")
-                    .queryParam("per_page", initialEventsPerRepository)
-                    .build(owner, repo))
-                .retrieve()
-                .body(String.class);
+            List<Activity> activities = new ArrayList<>();
+            activities.addAll(fetchPullRequests(owner, repo, "open"));
+            activities.addAll(fetchPullRequests(owner, repo, "closed"));
 
-            JsonNode events = objectMapper.readTree(response);
-
-            if (!events.isArray()) {
-                return;
-            }
-
-            List<JsonNode> ordered = new ArrayList<>();
-            events.forEach(ordered::add);
-
-            ordered.sort(Comparator.comparing(
-                this::eventTime,
-                Comparator.nullsLast(Comparator.naturalOrder())
+            activities.sort(Comparator.comparing(
+                    Activity::occurredAt,
+                    Comparator.nullsLast(Comparator.naturalOrder())
             ));
 
-            for (JsonNode event : ordered) {
-                processEvent(event, repository);
+            for (Activity activity : activities) {
+                processPullRequest(activity);
             }
 
         } catch (RestClientResponseException ex) {
@@ -131,171 +117,90 @@ public class GitHubPollingService {
         }
     }
 
-    private void processEvent(JsonNode event, String configuredRepository) {
-        String eventId = text(event, "id");
-        if (eventId == null || !seenEventIds.add(eventId)) {
+    private List<Activity> fetchPullRequests(String owner, String repository, String state) throws Exception {
+        String response = client.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/repos/{owner}/{repo}/pulls")
+                        .queryParam("state", state)
+                        .queryParam("sort", "open".equals(state) ? "created" : "updated")
+                        .queryParam("direction", "desc")
+                        .queryParam("per_page", pullRequestsPerRepository)
+                        .build(owner, repository))
+                .retrieve()
+                .body(String.class);
+
+        JsonNode pullRequests = objectMapper.readTree(response);
+        if (!pullRequests.isArray()) {
+            return List.of();
+        }
+
+        List<Activity> activities = new ArrayList<>();
+        for (JsonNode pullRequest : pullRequests) {
+            Activity activity = mapPullRequest(owner, repository, pullRequest, state);
+            if (activity != null) {
+                activities.add(activity);
+            }
+        }
+
+        return activities;
+    }
+
+    private void processPullRequest(Activity activity) {
+        if (activity == null) {
             return;
         }
 
-        Activity activity = mapEvent(event, configuredRepository);
-        if (activity != null) {
-            activityStore.add(activity);
-            activityStream.publish(activity);
+        String signature = activitySignature(activity);
+        String previous = lastPublishedPullRequestState.put(activity.id(), signature);
+        if (signature.equals(previous)) {
+            return;
         }
+
+        activityStore.add(activity);
+        activityStream.publish(activity);
     }
 
-    private Activity mapEvent(JsonNode root, String configuredRepository) {
-        String type = text(root, "type");
-        JsonNode payload = root.path("payload");
-        JsonNode repo = root.path("repo");
-        String fullName = text(repo, "name");
-        String repository = fullName != null && fullName.contains("/")
-                ? fullName.substring(fullName.indexOf('/') + 1)
-                : configuredRepository.substring(configuredRepository.lastIndexOf('/') + 1);
-        String organization = fullName != null && fullName.contains("/")
-                ? fullName.substring(0, fullName.indexOf('/'))
-                : configuredRepository.substring(0, configuredRepository.lastIndexOf('/'));
-        String actor = text(root.path("actor"), "login");
-        Instant occurredAt = eventTime(root);
+    private Activity mapPullRequest(String organization, String repository, JsonNode pullRequest, String state) {
+        Instant occurredAt;
+        String action;
 
-        return switch (type) {
-            case "PullRequestEvent" -> pullRequest(root, payload, repository, organization, actor, occurredAt);
-            default -> null;
-        };
-    }
+        if ("open".equals(state)) {
+            occurredAt = instant(text(pullRequest, "created_at"));
+            action = "opened";
+        } else {
+            String mergedAt = text(pullRequest, "merged_at");
+            if (mergedAt == null) {
+                return null;
+            }
 
-    private Activity pullRequest(JsonNode root, JsonNode payload, String repository,
-                                 String organization, String actor, Instant occurredAt) {
-        JsonNode pr = payload.path("pull_request");
-        String action = text(payload, "action");
-        String headSha = text(pr.path("head"), "sha");
-        if ("closed".equals(action) && pr.path("merged").asBoolean(false)) {
+            occurredAt = instant(mergedAt);
             action = "merged";
         }
 
-        if (!"opened".equals(action) && !"merged".equals(action)) {
+        if (occurredAt == null) {
             return null;
         }
 
+        int pullRequestNumber = pullRequest.path("number").asInt();
+        String headSha = text(pullRequest.path("head"), "sha");
         String commitMessage = fetchCommitMessage(organization, repository, headSha);
 
         return new Activity(
-                eventId(root),
+                pullRequestId(organization, repository, pullRequestNumber),
                 com.blackbox.activity.ActivityType.PULL_REQUEST,
                 action,
                 repository,
                 organization,
-                text(pr, "title"),
-                text(pr.path("user"), "login"),
+                text(pullRequest, "title"),
+                text(pullRequest.path("user"), "login"),
                 null,
-                pr.path("number").asInt(),
-                text(pr.path("head"), "ref"),
-                text(pr.path("base"), "ref"),
-                text(pr, "html_url"),
+                pullRequestNumber,
+                text(pullRequest.path("head"), "ref"),
+                text(pullRequest.path("base"), "ref"),
+                text(pullRequest, "html_url"),
                 commitMessage,
                 null,
                 "Pull request " + action,
-                occurredAt);
-    }
-
-    private Activity pullRequestReview(JsonNode root, JsonNode payload, String repository,
-                                       String organization, String actor, Instant occurredAt) {
-        JsonNode pr = payload.path("pull_request");
-        JsonNode review = payload.path("review");
-        String action = text(payload, "action");
-
-        return new Activity(
-                eventId(root),
-                com.blackbox.activity.ActivityType.REVIEW,
-                action,
-                repository,
-                organization,
-                text(pr, "title"),
-                text(pr.path("user"), "login"),
-                text(review.path("user"), "login"),
-                pr.path("number").asInt(),
-                text(pr.path("head"), "ref"),
-                text(pr.path("base"), "ref"),
-                text(pr, "html_url"),
-                null,
-                null,
-                "Pull request review " + action,
-                occurredAt);
-    }
-
-    private Activity release(JsonNode root, JsonNode payload, String repository,
-                             String organization, String actor, Instant occurredAt) {
-        JsonNode release = payload.path("release");
-        String action = text(payload, "action");
-
-        return new Activity(
-                eventId(root),
-                com.blackbox.activity.ActivityType.RELEASE,
-                action,
-                repository,
-                organization,
-                text(release, "name"),
-                text(release.path("author"), "login"),
-                null,
-                null,
-                null,
-                null,
-                text(release, "html_url"),
-                null,
-                text(release, "tag_name"),
-                "Release " + text(release, "tag_name"),
-                occurredAt);
-    }
-
-    private Activity push(JsonNode root, JsonNode payload, String repository,
-                          String organization, String actor, Instant occurredAt) {
-        String ref = text(payload, "ref");
-        String branch = ref != null && ref.startsWith("refs/heads/")
-                ? ref.substring("refs/heads/".length())
-                : ref;
-        int commits = payload.path("commits").size();
-        String compareUrl = text(payload, "compare");
-
-        return new Activity(
-                eventId(root),
-                com.blackbox.activity.ActivityType.PUSH,
-                "pushed",
-                repository,
-                organization,
-                null,
-                actor,
-                null,
-                null,
-                branch,
-                null,
-                compareUrl,
-                null,
-                null,
-                commits + " commit(s) pushed",
-                occurredAt);
-    }
-
-    private Activity workflow(JsonNode root, JsonNode payload, String repository,
-                              String organization, String actor, Instant occurredAt) {
-        JsonNode workflow = payload.path("workflow_run");
-        String action = text(payload, "action");
-
-        return new Activity(
-                eventId(root),
-                com.blackbox.activity.ActivityType.WORKFLOW,
-                action,
-                repository,
-                organization,
-                text(workflow, "name"),
-                text(workflow.path("actor"), "login"),
-                null,
-                null,
-                null,
-                null,
-                text(workflow, "html_url"),
-                null,
-                null,
-                "Workflow " + action,
                 occurredAt);
     }
 
@@ -371,23 +276,37 @@ public class GitHubPollingService {
                 .collect(Collectors.toUnmodifiableList());
     }
 
-    private String eventId(JsonNode root) {
-        return text(root, "id");
+    private String pullRequestId(String organization, String repository, int pullRequestNumber) {
+        return organization + "/" + repository + "#" + pullRequestNumber;
     }
 
-    private Instant eventTime(JsonNode node) {
-        String value = text(node, "created_at");
-        if (value == null) {
-            value = text(node.path("payload").path("pull_request"), "updated_at");
+    private String activitySignature(Activity activity) {
+        return String.join("|",
+                activity.action(),
+                nullSafe(activity.title()),
+                nullSafe(activity.author()),
+                String.valueOf(activity.pullRequestNumber()),
+                nullSafe(activity.branch()),
+                nullSafe(activity.targetBranch()),
+                nullSafe(activity.url()),
+                nullSafe(activity.commitMessage()),
+                activity.occurredAt() == null ? "" : activity.occurredAt().toString());
+    }
+
+    private Instant instant(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
         }
-        if (value == null) {
-            return Instant.EPOCH;
-        }
+
         try {
             return Instant.parse(value);
         } catch (Exception ignored) {
-            return Instant.EPOCH;
+            return null;
         }
+    }
+
+    private String nullSafe(String value) {
+        return value == null ? "" : value;
     }
 
     private String text(JsonNode node, String field) {

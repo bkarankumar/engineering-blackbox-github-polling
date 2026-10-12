@@ -4,15 +4,17 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedDeque;
 
 @Component
 public class ActivityStore {
 
-    private static final int MAX_PULL_REQUESTS_PER_ACTION = 3;
+    private static final int MAX_PULL_REQUESTS_PER_ACTION = 1;
 
     private final ConcurrentLinkedDeque<Activity> activities =
             new ConcurrentLinkedDeque<>();
@@ -30,25 +32,27 @@ public class ActivityStore {
         }
 
         activities.addFirst(activity);
-        trimPullRequests("opened", MAX_PULL_REQUESTS_PER_ACTION);
-        trimPullRequests("merged", MAX_PULL_REQUESTS_PER_ACTION);
+        trimPullRequestsPerRepository(MAX_PULL_REQUESTS_PER_ACTION);
 
         while (activities.size() > maxEvents) {
             activities.pollLast();
         }
     }
 
-    private void trimPullRequests(String action, int limit) {
+    private void trimPullRequestsPerRepository(int limit) {
         Set<String> idsToRemove = new HashSet<>();
-        int kept = 0;
+        Map<String, Integer> countsByRepositoryAndAction = new HashMap<>();
 
         for (Activity candidate : activities) {
-            if (candidate.type() != ActivityType.PULL_REQUEST || !action.equals(candidate.action())) {
+            if (candidate.type() != ActivityType.PULL_REQUEST) {
                 continue;
             }
 
-            kept++;
-            if (kept > limit) {
+            String key = pullRequestBucketKey(candidate);
+            int nextCount = countsByRepositoryAndAction.getOrDefault(key, 0) + 1;
+            countsByRepositoryAndAction.put(key, nextCount);
+
+            if (nextCount > limit) {
                 idsToRemove.add(candidate.id());
             }
         }
@@ -87,5 +91,13 @@ public class ActivityStore {
 
     private boolean same(String left, String right) {
         return left == null ? right == null : left.equals(right);
+    }
+
+    private String pullRequestBucketKey(Activity activity) {
+        return (activity.organization() == null ? "" : activity.organization())
+                + "/"
+                + (activity.repository() == null ? "" : activity.repository())
+                + "#"
+                + (activity.action() == null ? "" : activity.action());
     }
 }

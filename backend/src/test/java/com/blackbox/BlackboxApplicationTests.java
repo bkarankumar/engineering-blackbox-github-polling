@@ -20,7 +20,7 @@ class BlackboxApplicationTests {
     }
 
     @Test
-    void keepsOnlyLatestThreeOpenedAndMergedPullRequests() {
+    void keepsOnlyLatestOpenedAndMergedPullRequests() {
         ActivityStore store = new ActivityStore(500);
 
         for (int index = 1; index <= 4; index++) {
@@ -33,25 +33,65 @@ class BlackboxApplicationTests {
 
         List<Activity> latest = store.getLatest(20);
 
-        assertEquals(6, latest.size());
-        assertEquals(3, latest.stream().filter(activity -> "opened".equals(activity.action())).count());
-        assertEquals(3, latest.stream().filter(activity -> "merged".equals(activity.action())).count());
+        assertEquals(2, latest.size());
+        assertEquals(1, latest.stream().filter(activity -> "opened".equals(activity.action())).count());
+        assertEquals(1, latest.stream().filter(activity -> "merged".equals(activity.action())).count());
         assertTrue(latest.stream().anyMatch(activity -> "opened-4".equals(activity.id())));
-        assertTrue(latest.stream().anyMatch(activity -> "opened-3".equals(activity.id())));
-        assertTrue(latest.stream().anyMatch(activity -> "opened-2".equals(activity.id())));
+        assertFalse(latest.stream().anyMatch(activity -> "opened-3".equals(activity.id())));
+        assertFalse(latest.stream().anyMatch(activity -> "opened-2".equals(activity.id())));
         assertFalse(latest.stream().anyMatch(activity -> "opened-1".equals(activity.id())));
         assertTrue(latest.stream().anyMatch(activity -> "merged-4".equals(activity.id())));
-        assertTrue(latest.stream().anyMatch(activity -> "merged-3".equals(activity.id())));
-        assertTrue(latest.stream().anyMatch(activity -> "merged-2".equals(activity.id())));
+        assertFalse(latest.stream().anyMatch(activity -> "merged-3".equals(activity.id())));
+        assertFalse(latest.stream().anyMatch(activity -> "merged-2".equals(activity.id())));
         assertFalse(latest.stream().anyMatch(activity -> "merged-1".equals(activity.id())));
     }
 
+    @Test
+    void keepsSeparatePullRequestWindowsPerRepository() {
+        ActivityStore store = new ActivityStore(500);
+
+        for (int index = 1; index <= 4; index++) {
+            store.add(pullRequest("repo-a-opened-" + index, "opened", index, "repo-a"));
+            store.add(pullRequest("repo-b-opened-" + index, "opened", 100 + index, "repo-b"));
+        }
+
+        List<Activity> latest = store.getLatest(20);
+
+        assertEquals(2, latest.stream().filter(activity -> "opened".equals(activity.action())).count());
+        assertTrue(latest.stream().anyMatch(activity -> "repo-a-opened-4".equals(activity.id())));
+        assertFalse(latest.stream().anyMatch(activity -> "repo-a-opened-3".equals(activity.id())));
+        assertFalse(latest.stream().anyMatch(activity -> "repo-a-opened-2".equals(activity.id())));
+        assertFalse(latest.stream().anyMatch(activity -> "repo-a-opened-1".equals(activity.id())));
+        assertTrue(latest.stream().anyMatch(activity -> "repo-b-opened-4".equals(activity.id())));
+        assertFalse(latest.stream().anyMatch(activity -> "repo-b-opened-3".equals(activity.id())));
+        assertFalse(latest.stream().anyMatch(activity -> "repo-b-opened-2".equals(activity.id())));
+        assertFalse(latest.stream().anyMatch(activity -> "repo-b-opened-1".equals(activity.id())));
+    }
+
+    @Test
+    void mergedPullRequestReplacesOpenedStateForSamePullRequest() {
+        ActivityStore store = new ActivityStore(500);
+
+        store.add(pullRequest("org/repo#162", "opened", 162));
+        store.add(pullRequest("org/repo#162", "merged", 162));
+
+        List<Activity> latest = store.getLatest(10);
+
+        assertEquals(1, latest.size());
+        assertEquals("merged", latest.get(0).action());
+        assertEquals(162, latest.get(0).pullRequestNumber());
+    }
+
     private Activity pullRequest(String id, String action, int prNumber) {
+        return pullRequest(id, action, prNumber, "repo");
+    }
+
+    private Activity pullRequest(String id, String action, int prNumber, String repository) {
         return new Activity(
                 id,
                 ActivityType.PULL_REQUEST,
                 action,
-                "repo",
+                repository,
                 "org",
                 "Title " + prNumber,
                 "author",

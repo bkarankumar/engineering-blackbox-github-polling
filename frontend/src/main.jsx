@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const MAX_PULL_REQUESTS_PER_ACTION = 3;
+const MAX_PULL_REQUESTS_PER_ACTION = 1;
 
 function App() {
     const [activities, setActivities] = useState([]);
@@ -46,12 +46,14 @@ function App() {
 
     async function loadInitialActivities() {
         const [activitiesResponse, statusResponse] = await Promise.all([
-            fetch("/api/activities?limit=6"),
+            fetch("/api/activities?limit=500"),
             fetch("/api/status")
         ]);
 
         if (activitiesResponse.ok) {
-            setActivities(limitPullRequestActivities(await activitiesResponse.json()));
+            setActivities(limitPullRequestActivities(
+                sortActivitiesByOccurredAtDesc(await activitiesResponse.json())
+            ));
         }
 
         if (statusResponse.ok) {
@@ -130,9 +132,9 @@ function App() {
                 </div>
 
                 <div>
-                    <span className="hero-label">PR WINDOW</span>
-                    <strong>3 / 3</strong>
-                    <span>latest opened and merged PRs</span>
+                    <span className="hero-label">LATEST PRS</span>
+                    <strong>1 / 1</strong>
+                    <span>1 open / 1 merged per repo</span>
                 </div>
             </section>
 
@@ -171,7 +173,7 @@ function App() {
                 <div className="section-heading">
                     <div>
                         <h2>Live activity</h2>
-                        <span>GitHub is polled automatically every 15 minutes</span>
+                        <span>{formatPollingSummary(status?.pollingIntervalMs)}</span>
                     </div>
                 </div>
 
@@ -189,7 +191,7 @@ function App() {
                             <h3>Waiting for activity</h3>
                             <p>
                                 Open or merge a pull request in a configured repository and the latest
-                                three events for each will appear here.
+                                opened and merged PR for each will appear here.
                             </p>
                         </div>
                     )}
@@ -412,10 +414,7 @@ function getDetails(activity) {
 }
 
 function limitPullRequestActivities(items) {
-    const counts = {
-        opened: 0,
-        merged: 0
-    };
+    const countsByRepositoryAndAction = new Map();
     const seenPullRequests = new Set();
 
     return items.filter(activity => {
@@ -432,12 +431,14 @@ function limitPullRequestActivities(items) {
             return false;
         }
 
-        if (counts[activity.action] >= MAX_PULL_REQUESTS_PER_ACTION) {
+        const repositoryActionKey = getRepositoryActionKey(activity);
+        const currentCount = countsByRepositoryAndAction.get(repositoryActionKey) ?? 0;
+        if (currentCount >= MAX_PULL_REQUESTS_PER_ACTION) {
             return false;
         }
 
         seenPullRequests.add(pullRequestKey);
-        counts[activity.action] += 1;
+        countsByRepositoryAndAction.set(repositoryActionKey, currentCount + 1);
         return true;
     });
 }
@@ -452,7 +453,7 @@ function mergeActivity(items, nextActivity) {
         return !nextPullRequestKey || getPullRequestKey(item) !== nextPullRequestKey;
     });
 
-    return limitPullRequestActivities([nextActivity, ...withoutDuplicate]);
+    return limitPullRequestActivities(sortActivitiesByOccurredAtDesc([nextActivity, ...withoutDuplicate]));
 }
 
 function getPullRequestKey(activity) {
@@ -465,6 +466,44 @@ function getPullRequestKey(activity) {
         activity.repository ?? "",
         activity.pullRequestNumber
     ].join("#");
+}
+
+function getRepositoryActionKey(activity) {
+    return [
+        activity.organization ?? "",
+        activity.repository ?? "",
+        activity.action ?? ""
+    ].join("#");
+}
+
+function sortActivitiesByOccurredAtDesc(items) {
+    return [...items].sort((left, right) =>
+        new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime()
+    );
+}
+
+function formatPollingSummary(pollingIntervalMs) {
+    if (!pollingIntervalMs) {
+        return "GitHub pull requests are polled automatically";
+    }
+
+    return `GitHub pull requests are polled automatically every ${formatDuration(pollingIntervalMs)}`;
+}
+
+function formatDuration(durationMs) {
+    const totalSeconds = Math.max(1, Math.round(durationMs / 1000));
+
+    if (totalSeconds < 60) {
+        return `${totalSeconds} second${totalSeconds === 1 ? "" : "s"}`;
+    }
+
+    const totalMinutes = Math.round(totalSeconds / 60);
+    if (totalMinutes < 60) {
+        return `${totalMinutes} minute${totalMinutes === 1 ? "" : "s"}`;
+    }
+
+    const totalHours = Math.round(totalMinutes / 60);
+    return `${totalHours} hour${totalHours === 1 ? "" : "s"}`;
 }
 
 function formatTime(value) {

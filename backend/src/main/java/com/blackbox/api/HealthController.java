@@ -23,8 +23,11 @@ public class HealthController {
     @Value("${github.repositories:}")
     private String repositories;
 
-    @Value("${github.polling-interval-ms:10000}")
+    @Value("${github.polling-interval-ms:180000}")
     private long pollingIntervalMs;
+
+    @Value("${github.pull-requests-per-repository:30}")
+    private int pullRequestsPerRepository;
 
     @GetMapping("/status")
     public Map<String, Object> status() {
@@ -37,11 +40,12 @@ public class HealthController {
 
         return Map.of(
                 "status", "UP",
-                "mode", "github-api-polling",
+                "mode", "github-pr-polling",
                 "storedEvents", store.count(),
                 "connectedDashboards", stream.connectedClients(),
                 "configuredRepositories", configuredRepositories,
-                "pollingIntervalMs", pollingIntervalMs
+                "pollingIntervalMs", pollingIntervalMs,
+                "pullRequestsPerRepository", pullRequestsPerRepository
         );
     }
 }
