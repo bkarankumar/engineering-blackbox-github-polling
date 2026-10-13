@@ -4,6 +4,7 @@ import com.blackbox.activity.ActivityStore;
 import com.blackbox.activity.ActivityStream;
 import com.blackbox.github.GitHubPollingService;
 import com.blackbox.github.RepositoryBuildStatus;
+import com.blackbox.github.StalePullRequestStatus;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -32,6 +33,9 @@ public class HealthController {
     @Value("${github.pull-requests-per-repository:30}")
     private int pullRequestsPerRepository;
 
+    @Value("${blackbox.stale-pr-days:3}")
+    private int stalePullRequestDays;
+
     @GetMapping("/status")
     public Map<String, Object> status() {
         List<String> configuredRepositories = repositories == null || repositories.isBlank()
@@ -45,17 +49,20 @@ public class HealthController {
         List<RepositoryBuildStatus> failingBuildStatuses = repositoryBuildStatuses.stream()
                 .filter(RepositoryBuildStatus::failing)
                 .toList();
+        List<StalePullRequestStatus> stalePullRequests = gitHubPollingService.getStalePullRequests();
 
-        return Map.of(
-                "status", "UP",
-                "mode", "github-pr-polling",
-                "storedEvents", store.count(),
-                "connectedDashboards", stream.connectedClients(),
-                "configuredRepositories", configuredRepositories,
-                "pollingIntervalMs", pollingIntervalMs,
-                "pullRequestsPerRepository", pullRequestsPerRepository,
-                "repositoryBuildStatuses", repositoryBuildStatuses,
-                "failingBuildStatuses", failingBuildStatuses
+        return Map.ofEntries(
+                Map.entry("status", "UP"),
+                Map.entry("mode", "github-pr-polling"),
+                Map.entry("storedEvents", store.count()),
+                Map.entry("connectedDashboards", stream.connectedClients()),
+                Map.entry("configuredRepositories", configuredRepositories),
+                Map.entry("pollingIntervalMs", pollingIntervalMs),
+                Map.entry("pullRequestsPerRepository", pullRequestsPerRepository),
+                Map.entry("stalePullRequestDays", stalePullRequestDays),
+                Map.entry("repositoryBuildStatuses", repositoryBuildStatuses),
+                Map.entry("failingBuildStatuses", failingBuildStatuses),
+                Map.entry("stalePullRequests", stalePullRequests)
         );
     }
 }

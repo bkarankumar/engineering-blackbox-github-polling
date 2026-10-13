@@ -14,6 +14,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -32,12 +33,14 @@ public class GitHubPollingService {
     private final ActivityStream activityStream;
     private final List<String> repositories;
     private final int pullRequestsPerRepository;
+    private final int stalePullRequestDays;
 
     /** Last emitted PR snapshot keyed by owner/repo#number. */
     private final Map<String, String> lastPublishedPullRequestState = new ConcurrentHashMap<>();
     private final Map<String, String> commitMessagesBySha = new ConcurrentHashMap<>();
     private final Map<String, String> defaultBranchByRepository = new ConcurrentHashMap<>();
     private final Map<String, RepositoryBuildStatus> repositoryBuildStatuses = new ConcurrentHashMap<>();
+    private final Map<String, List<StalePullRequestStatus>> stalePullRequestsByRepository = new ConcurrentHashMap<>();
 
     public GitHubPollingService(
             ObjectMapper objectMapper,
@@ -46,12 +49,14 @@ public class GitHubPollingService {
             @Value("${github.api-url:https://api.github.com}") String apiUrl,
             @Value("${github.token:}") String token,
             @Value("${github.repositories:}") String repositoryConfig,
-            @Value("${github.pull-requests-per-repository:30}") int pullRequestsPerRepository) {
+            @Value("${github.pull-requests-per-repository:30}") int pullRequestsPerRepository,
+            @Value("${blackbox.stale-pr-days:3}") int stalePullRequestDays) {
 
         this.objectMapper = objectMapper;
         this.activityStore = activityStore;
         this.activityStream = activityStream;
         this.pullRequestsPerRepository = pullRequestsPerRepository;
+        this.stalePullRequestDays = stalePullRequestDays;
         this.repositories = parseRepositories(repositoryConfig);
 
         RestClient.Builder builder = RestClient.builder()
@@ -90,8 +95,11 @@ public class GitHubPollingService {
             String owner = parts[0];
             String repo = parts[1];
 
+            List<Activity> openPullRequests = fetchPullRequests(owner, repo, "open");
+            updateStalePullRequests(owner, repo, openPullRequests);
+
             List<Activity> activities = new ArrayList<>();
-            activities.addAll(fetchPullRequests(owner, repo, "open"));
+            activities.addAll(openPullRequests);
             activities.addAll(fetchPullRequests(owner, repo, "closed"));
             refreshRepositoryBuildStatus(owner, repo);
 
@@ -151,6 +159,16 @@ public class GitHubPollingService {
     public List<RepositoryBuildStatus> getRepositoryBuildStatuses() {
         return repositoryBuildStatuses.values().stream()
                 .sorted(Comparator.comparing(status -> status.organization() + "/" + status.repository()))
+                .toList();
+    }
+
+    public List<StalePullRequestStatus> getStalePullRequests() {
+        return stalePullRequestsByRepository.values().stream()
+                .flatMap(List::stream)
+                .sorted(Comparator
+                        .comparingLong(StalePullRequestStatus::openDays).reversed()
+                        .thenComparing(status -> status.organization() + "/" + status.repository())
+                        .thenComparingInt(StalePullRequestStatus::pullRequestNumber))
                 .toList();
     }
 
@@ -268,6 +286,35 @@ public class GitHubPollingService {
                     ex.getMessage()
             );
         }
+    }
+
+    private void updateStalePullRequests(String owner, String repository, List<Activity> openPullRequests) {
+        String repositoryKey = owner + "/" + repository;
+        Instant now = Instant.now();
+
+        List<StalePullRequestStatus> stalePullRequests = openPullRequests.stream()
+                .filter(activity -> activity.occurredAt() != null)
+                .map(activity -> toStalePullRequestStatus(activity, now))
+                .filter(status -> status.openDays() >= stalePullRequestDays)
+                .sorted(Comparator.comparingLong(StalePullRequestStatus::openDays).reversed())
+                .toList();
+
+        stalePullRequestsByRepository.put(repositoryKey, stalePullRequests);
+    }
+
+    private StalePullRequestStatus toStalePullRequestStatus(Activity activity, Instant now) {
+        long openDays = Math.max(0, ChronoUnit.DAYS.between(activity.occurredAt(), now));
+
+        return new StalePullRequestStatus(
+                activity.organization(),
+                activity.repository(),
+                activity.pullRequestNumber() == null ? 0 : activity.pullRequestNumber(),
+                activity.title(),
+                activity.author(),
+                activity.url(),
+                activity.occurredAt(),
+                openDays
+        );
     }
 
     private String fetchDefaultBranch(String owner, String repository) {

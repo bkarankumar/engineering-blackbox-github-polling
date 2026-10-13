@@ -73,6 +73,8 @@ function App() {
 
     const configuredRepositories = status?.configuredRepositories ?? [];
     const failingBuildStatuses = status?.failingBuildStatuses ?? [];
+    const stalePullRequestDays = status?.stalePullRequestDays ?? 3;
+    const stalePullRequests = status?.stalePullRequests ?? [];
 
     const repositories = useMemo(
         () => [...new Set([
@@ -91,6 +93,14 @@ function App() {
             !actionFilter || activity.action === actionFilter;
 
         return repositoryMatch && actionMatch;
+    });
+
+    const filteredStalePullRequests = stalePullRequests.filter(stalePullRequest => {
+        if (!repository) {
+            return true;
+        }
+
+        return `${stalePullRequest.organization}/${stalePullRequest.repository}` === repository;
     });
 
     const openedCount = activities.filter(
@@ -149,107 +159,160 @@ function App() {
                 </div>
             </section>
 
-            <section className={`pipeline-summary ${failingBuildStatuses.length ? "failing" : "healthy"}`}>
-                <div className="pipeline-summary-header">
-                    <span className="hero-label">MAIN PIPELINE STATUS</span>
-                    <strong>
-                        {failingBuildStatuses.length
-                            ? `${failingBuildStatuses.length} failing repo${failingBuildStatuses.length === 1 ? "" : "s"}`
-                            : "All default-branch pipelines passing"}
-                    </strong>
-                </div>
-
-                {failingBuildStatuses.length ? (
-                    <div className="pipeline-summary-list">
-                        {failingBuildStatuses.map(buildStatus => {
-                            const repositoryName = `${buildStatus.organization}/${buildStatus.repository}`;
-                            const workflowLabel = buildStatus.workflowName || "Latest workflow run";
-
-                            return buildStatus.url ? (
-                                <a
-                                    key={repositoryName}
-                                    className="pipeline-chip"
-                                    href={buildStatus.url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                >
-                                    <span>{repositoryName}</span>
-                                    <span>{workflowLabel}</span>
-                                </a>
-                            ) : (
-                                <span key={repositoryName} className="pipeline-chip">
-                                    <span>{repositoryName}</span>
-                                    <span>{workflowLabel}</span>
-                                </span>
-                            );
-                        })}
-                    </div>
-                ) : (
-                    <p className="pipeline-summary-empty">
-                        The latest completed workflow run on each repository&apos;s default branch is healthy.
-                    </p>
-                )}
-            </section>
-
-            <section className="filters">
-                <div className="search-box">
-                    <Search size={16} />
-                    <select
-                        value={repository}
-                        onChange={event => setRepository(event.target.value)}
-                    >
-                        <option value="">All repositories</option>
-                        {repositories.map(repo => (
-                            <option key={repo} value={repo}>
-                                {repo}
-                            </option>
-                        ))}
-                    </select>
-                </div>
-
-                <select
-                    value={actionFilter}
-                    onChange={event => setActionFilter(event.target.value)}
-                >
-                    <option value="">All PRs</option>
-                    <option value="opened">Opened PRs</option>
-                    <option value="merged">Merged PRs</option>
-                </select>
-
-                <button onClick={loadInitialActivities}>
-                    <RefreshCw size={15} />
-                    Refresh
-                </button>
-            </section>
-
-            <main>
-                <div className="section-heading">
-                    <div>
-                        <h2>Live activity</h2>
-                        <span>{formatPollingSummary(status?.pollingIntervalMs)}</span>
-                    </div>
-                </div>
-
-                <div className="timeline">
-                    {filtered.map(activity => (
-                        <ActivityCard
-                            key={activity.id}
-                            activity={activity}
-                        />
-                    ))}
-
-                    {!filtered.length && (
-                        <div className="empty">
-                            <Radio size={35} />
-                            <h3>Waiting for activity</h3>
-                            <p>
-                                Open or merge a pull request in a configured repository and the latest
-                                opened and merged PR for each will appear here.
-                            </p>
+            <section className="dashboard-grid">
+                <aside className="dashboard-sidebar">
+                    <section className={`pipeline-summary ${failingBuildStatuses.length ? "failing" : "healthy"}`}>
+                        <div className="pipeline-summary-header">
+                            <span className="hero-label">MAIN PIPELINE STATUS</span>
+                            <strong>
+                                {failingBuildStatuses.length
+                                    ? `${failingBuildStatuses.length} failing repo${failingBuildStatuses.length === 1 ? "" : "s"}`
+                                    : "All default-branch pipelines passing"}
+                            </strong>
                         </div>
-                    )}
-                </div>
-            </main>
+
+                        {failingBuildStatuses.length ? (
+                            <div className="pipeline-summary-list">
+                                {failingBuildStatuses.map(buildStatus => {
+                                    const repositoryName = `${buildStatus.organization}/${buildStatus.repository}`;
+                                    const workflowLabel = buildStatus.workflowName || "Latest workflow run";
+
+                                    return buildStatus.url ? (
+                                        <a
+                                            key={repositoryName}
+                                            className="pipeline-chip"
+                                            href={buildStatus.url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                        >
+                                            <span>{repositoryName}</span>
+                                            <span>{workflowLabel}</span>
+                                        </a>
+                                    ) : (
+                                        <span key={repositoryName} className="pipeline-chip">
+                                            <span>{repositoryName}</span>
+                                            <span>{workflowLabel}</span>
+                                        </span>
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <p className="pipeline-summary-empty">
+                                The latest completed workflow run on each repository&apos;s default branch is healthy.
+                            </p>
+                        )}
+                    </section>
+
+                    <section className={`attention-summary ${filteredStalePullRequests.length ? "warning" : "healthy"}`}>
+                        <div className="attention-summary-header">
+                            <span className="hero-label">PRS WAITING TOO LONG</span>
+                            <strong>
+                                {filteredStalePullRequests.length
+                                    ? `${filteredStalePullRequests.length} PR${filteredStalePullRequests.length === 1 ? "" : "s"} open ${stalePullRequestDays}+ days`
+                                    : `No PRs open ${stalePullRequestDays}+ days`}
+                            </strong>
+                        </div>
+
+                        {filteredStalePullRequests.length ? (
+                            <div className="attention-summary-list">
+                                {filteredStalePullRequests.map(stalePullRequest => {
+                                    const repositoryName = `${stalePullRequest.organization}/${stalePullRequest.repository}`;
+                                    const ageLabel = `${stalePullRequest.openDays}d open`;
+
+                                    return stalePullRequest.url ? (
+                                        <a
+                                            key={`${repositoryName}#${stalePullRequest.pullRequestNumber}`}
+                                            className="attention-chip"
+                                            href={stalePullRequest.url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                        >
+                                            <span>{repositoryName} · PR #{stalePullRequest.pullRequestNumber}</span>
+                                            <span>{stalePullRequest.title || ageLabel}</span>
+                                            <span>{ageLabel}</span>
+                                        </a>
+                                    ) : (
+                                        <span
+                                            key={`${repositoryName}#${stalePullRequest.pullRequestNumber}`}
+                                            className="attention-chip"
+                                        >
+                                            <span>{repositoryName} · PR #{stalePullRequest.pullRequestNumber}</span>
+                                            <span>{stalePullRequest.title || ageLabel}</span>
+                                            <span>{ageLabel}</span>
+                                        </span>
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <p className="attention-summary-empty">
+                                No open pull requests have crossed the {stalePullRequestDays}-day attention threshold.
+                            </p>
+                        )}
+                    </section>
+                </aside>
+
+                <main className="dashboard-feed">
+                    <section className="filters">
+                        <div className="search-box">
+                            <Search size={16} />
+                            <select
+                                value={repository}
+                                onChange={event => setRepository(event.target.value)}
+                            >
+                                <option value="">All repositories</option>
+                                {repositories.map(repo => (
+                                    <option key={repo} value={repo}>
+                                        {repo}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <select
+                            value={actionFilter}
+                            onChange={event => setActionFilter(event.target.value)}
+                        >
+                            <option value="">All PRs</option>
+                            <option value="opened">Opened PRs</option>
+                            <option value="merged">Merged PRs</option>
+                        </select>
+
+                        <button onClick={loadInitialActivities}>
+                            <RefreshCw size={15} />
+                            Refresh
+                        </button>
+                    </section>
+
+                    <section className="live-activity-panel">
+                        <div className="section-heading">
+                            <div>
+                                <h2>Live activity</h2>
+                                <span>{formatPollingSummary(status?.pollingIntervalMs)}</span>
+                            </div>
+                        </div>
+
+                        <div className="timeline">
+                            {filtered.map(activity => (
+                                <ActivityCard
+                                    key={activity.id}
+                                    activity={activity}
+                                />
+                            ))}
+
+                            {!filtered.length && (
+                                <div className="empty">
+                                    <Radio size={35} />
+                                    <h3>Waiting for activity</h3>
+                                    <p>
+                                        Open or merge a pull request in a configured repository and the latest
+                                        opened and merged PR for each will appear here.
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+                    </section>
+                </main>
+            </section>
         </div>
     );
 }

@@ -34,6 +34,7 @@ The poller reads GitHub Pull Request APIs and maps these pull request states:
 - Pull requests: opened, merged
 - Head commit message for each displayed PR
 - Latest completed default-branch workflow run per repository, with failing repos highlighted in the dashboard
+- A dedicated dashboard section for open pull requests older than the configured 3-day threshold
 
 No PostgreSQL, Redis, Kafka, webhook endpoint, tunnel, or public URL is required for the local MVP.
 
@@ -61,6 +62,8 @@ GITHUB_PULL_REQUESTS_PER_REPOSITORY=30
 `GITHUB_POLLING_INTERVAL_MS` is optional. If not set, the backend defaults to polling every 3 minutes (`180000` ms).
 
 `GITHUB_PULL_REQUESTS_PER_REPOSITORY` controls how many open and recently closed pull requests are inspected per repository on each poll. The legacy `GITHUB_INITIAL_EVENTS` variable is still accepted as a fallback.
+
+`BLACKBOX_STALE_PR_DAYS` controls when an open pull request moves into the "PRs waiting too long" dashboard section. The default is `3` days.
 
 ## Run locally
 
