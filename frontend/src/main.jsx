@@ -382,6 +382,31 @@ function ActivityCard(props) {
                     )}
                 </div>
 
+                {activity.buildStatus && (
+                    activity.buildUrl ? (
+                        <a
+                            className={`build-badge build-${activity.buildStatus}`}
+                            href={activity.buildUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={activity.buildName ? `Build: ${activity.buildName}` : `Build is ${activity.buildStatus}`}
+                        >
+                            <span>Build</span>
+                            <strong>{`Build: ${formatBuildStatusLabel(activity.buildStatus)}`}</strong>
+                            {activity.buildName && <span>{activity.buildName}</span>}
+                        </a>
+                    ) : (
+                        <div
+                            className={`build-badge build-${activity.buildStatus}`}
+                            title={activity.buildName ? `Build: ${activity.buildName}` : `Build is ${activity.buildStatus}`}
+                        >
+                            <span>Build</span>
+                            <strong>{`Build: ${formatBuildStatusLabel(activity.buildStatus)}`}</strong>
+                            {activity.buildName && <span>{activity.buildName}</span>}
+                        </div>
+                    )
+                )}
+
                 {activity.commitMessage && (
                     <div className="details">
                         <span>💬 {activity.commitMessage}</span>
@@ -473,6 +498,11 @@ ActivityCard.propTypes = {
         targetBranch: PropTypes.string,
         url: PropTypes.string,
         commitMessage: PropTypes.string,
+        buildStatus: PropTypes.string,
+        buildConclusion: PropTypes.string,
+        buildName: PropTypes.string,
+        buildUrl: PropTypes.string,
+        buildUpdatedAt: PropTypes.string,
         releaseTag: PropTypes.string,
         summary: PropTypes.string,
         occurredAt: PropTypes.string.isRequired
@@ -590,6 +620,19 @@ function getRepositoryActionKey(activity) {
         activity.repository ?? "",
         activity.action ?? ""
     ].join("#");
+}
+
+function formatBuildStatusLabel(status) {
+    switch (status) {
+        case "passing":
+            return "Passing";
+        case "failing":
+            return "Failing";
+        case "running":
+            return "Running";
+        default:
+            return "Unknown";
+    }
 }
 
 function sortActivitiesByOccurredAtDesc(items) {

@@ -16,6 +16,11 @@ public record Activity(
         String targetBranch,
         String url,
         String commitMessage,
+        String buildStatus,
+        String buildConclusion,
+        String buildName,
+        String buildUrl,
+        Instant buildUpdatedAt,
         String releaseTag,
         String summary,
         Instant occurredAt

@@ -211,6 +211,7 @@ public class GitHubPollingService {
         int pullRequestNumber = pullRequest.path("number").asInt();
         String headSha = text(pullRequest.path("head"), "sha");
         String commitMessage = fetchCommitMessage(organization, repository, headSha);
+        PullRequestBuildStatus buildStatus = fetchPullRequestBuildStatus(organization, repository, headSha);
 
         return new Activity(
                 pullRequestId(organization, repository, pullRequestNumber),
@@ -226,9 +227,232 @@ public class GitHubPollingService {
                 text(pullRequest.path("base"), "ref"),
                 text(pullRequest, "html_url"),
                 commitMessage,
+                buildStatus.status(),
+                buildStatus.conclusion(),
+                buildStatus.name(),
+                buildStatus.url(),
+                buildStatus.updatedAt(),
                 null,
                 "Pull request " + action,
                 occurredAt);
+    }
+
+    private PullRequestBuildStatus fetchPullRequestBuildStatus(String owner, String repository, String sha) {
+        if (sha == null || sha.isBlank()) {
+            return PullRequestBuildStatus.unknown();
+        }
+
+        PullRequestBuildStatus fromChecks = fetchPullRequestBuildStatusFromChecks(owner, repository, sha);
+        if (fromChecks != null) {
+            return fromChecks;
+        }
+
+        PullRequestBuildStatus fromStatuses = fetchPullRequestBuildStatusFromCommitStatus(owner, repository, sha);
+        return fromStatuses != null ? fromStatuses : PullRequestBuildStatus.unknown();
+    }
+
+    private PullRequestBuildStatus fetchPullRequestBuildStatusFromChecks(String owner, String repository, String sha) {
+        try {
+            String response = client.get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/repos/{owner}/{repo}/commits/{sha}/check-runs")
+                            .queryParam("per_page", 100)
+                            .build(owner, repository, sha))
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode checkRuns = objectMapper.readTree(response).path("check_runs");
+            if (!checkRuns.isArray() || checkRuns.isEmpty()) {
+                return null;
+            }
+
+            return aggregateBuildStatusFromCheckRuns(checkRuns);
+        } catch (RestClientResponseException ex) {
+            log.debug(
+                    "Unable to fetch check runs for {}/{}@{}: HTTP {} {}",
+                    owner,
+                    repository,
+                    sha,
+                    ex.getStatusCode().value(),
+                    ex.getStatusText()
+            );
+            return null;
+        } catch (Exception ex) {
+            log.debug(
+                    "Unable to fetch check runs for {}/{}@{}: {}",
+                    owner,
+                    repository,
+                    sha,
+                    ex.getMessage()
+            );
+            return null;
+        }
+    }
+
+    private PullRequestBuildStatus aggregateBuildStatusFromCheckRuns(JsonNode checkRuns) {
+        JsonNode latestRun = null;
+        JsonNode latestFailingRun = null;
+        JsonNode latestRunningRun = null;
+        Instant latestRunUpdatedAt = null;
+        Instant latestFailingRunUpdatedAt = null;
+        Instant latestRunningRunUpdatedAt = null;
+        boolean hasFailure = false;
+        boolean hasRunning = false;
+        boolean hasSuccess = false;
+
+        for (JsonNode checkRun : checkRuns) {
+            Instant updatedAt = instant(text(checkRun, "updated_at"));
+            if (isNewerThan(updatedAt, latestRunUpdatedAt)) {
+                latestRun = checkRun;
+                latestRunUpdatedAt = updatedAt;
+            }
+
+            String status = text(checkRun, "status");
+            String conclusion = text(checkRun, "conclusion");
+
+            if (isRunningStatus(status)) {
+                hasRunning = true;
+                if (isNewerThan(updatedAt, latestRunningRunUpdatedAt)) {
+                    latestRunningRun = checkRun;
+                    latestRunningRunUpdatedAt = updatedAt;
+                }
+            }
+
+            if (isFailingConclusion(conclusion)) {
+                hasFailure = true;
+                if (isNewerThan(updatedAt, latestFailingRunUpdatedAt)) {
+                    latestFailingRun = checkRun;
+                    latestFailingRunUpdatedAt = updatedAt;
+                }
+            }
+
+            if (isPassingConclusion(conclusion)) {
+                hasSuccess = true;
+            }
+        }
+
+        JsonNode representative = hasFailure
+                ? latestFailingRun != null ? latestFailingRun : latestRun
+                : hasRunning
+                ? latestRunningRun != null ? latestRunningRun : latestRun
+                : latestRun;
+
+        String status = hasFailure
+                ? "failing"
+                : hasRunning
+                ? "running"
+                : hasSuccess
+                ? "passing"
+                : "unknown";
+
+        String conclusion = hasFailure
+                ? text(representative, "conclusion")
+                : hasRunning
+                ? "pending"
+                : hasSuccess
+                ? text(representative, "conclusion")
+                : null;
+
+        return new PullRequestBuildStatus(
+                status,
+                conclusion,
+                text(representative, "name"),
+                text(representative, "html_url"),
+                instant(text(representative, "updated_at"))
+        );
+    }
+
+    private boolean isRunningStatus(String status) {
+        return "queued".equalsIgnoreCase(status)
+                || "in_progress".equalsIgnoreCase(status)
+                || "requested".equalsIgnoreCase(status)
+                || "waiting".equalsIgnoreCase(status)
+                || "pending".equalsIgnoreCase(status);
+    }
+
+    private boolean isPassingConclusion(String conclusion) {
+        return "success".equalsIgnoreCase(conclusion)
+                || "neutral".equalsIgnoreCase(conclusion)
+                || "skipped".equalsIgnoreCase(conclusion);
+    }
+
+    private PullRequestBuildStatus fetchPullRequestBuildStatusFromCommitStatus(String owner, String repository, String sha) {
+        try {
+            String response = client.get()
+                    .uri("/repos/{owner}/{repo}/commits/{sha}/status", owner, repository, sha)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode commitStatus = objectMapper.readTree(response);
+            String state = text(commitStatus, "state");
+            if (state == null || state.isBlank()) {
+                return null;
+            }
+
+            JsonNode statuses = commitStatus.path("statuses");
+            JsonNode latestStatus = null;
+            Instant latestStatusUpdatedAt = null;
+            if (statuses.isArray()) {
+                for (JsonNode statusEntry : statuses) {
+                    Instant updatedAt = instant(text(statusEntry, "updated_at"));
+                    if (isNewerThan(updatedAt, latestStatusUpdatedAt)) {
+                        latestStatus = statusEntry;
+                        latestStatusUpdatedAt = updatedAt;
+                    }
+                }
+            }
+
+            String buildState = mapCommitStateToBuildState(state);
+            return new PullRequestBuildStatus(
+                    buildState,
+                    state,
+                    latestStatus != null ? text(latestStatus, "context") : text(commitStatus, "state"),
+                    latestStatus != null && text(latestStatus, "target_url") != null
+                            ? text(latestStatus, "target_url")
+                            : text(commitStatus, "commit_url"),
+                    latestStatus != null ? instant(text(latestStatus, "updated_at")) : null
+            );
+        } catch (RestClientResponseException ex) {
+            log.debug(
+                    "Unable to fetch commit status for {}/{}@{}: HTTP {} {}",
+                    owner,
+                    repository,
+                    sha,
+                    ex.getStatusCode().value(),
+                    ex.getStatusText()
+            );
+            return null;
+        } catch (Exception ex) {
+            log.debug(
+                    "Unable to fetch commit status for {}/{}@{}: {}",
+                    owner,
+                    repository,
+                    sha,
+                    ex.getMessage()
+            );
+            return null;
+        }
+    }
+
+    private String mapCommitStateToBuildState(String state) {
+        if (state == null) {
+            return "unknown";
+        }
+
+        return switch (state.toLowerCase()) {
+            case "success" -> "passing";
+            case "failure", "error" -> "failing";
+            case "pending" -> "running";
+            default -> "unknown";
+        };
+    }
+
+    private boolean isNewerThan(Instant candidate, Instant current) {
+        if (candidate == null) {
+            return false;
+        }
+
+        return current == null || candidate.isAfter(current);
     }
 
     private void refreshRepositoryBuildStatus(String owner, String repository) {
@@ -442,6 +666,11 @@ public class GitHubPollingService {
                 nullSafe(activity.targetBranch()),
                 nullSafe(activity.url()),
                 nullSafe(activity.commitMessage()),
+                nullSafe(activity.buildStatus()),
+                nullSafe(activity.buildConclusion()),
+                nullSafe(activity.buildName()),
+                nullSafe(activity.buildUrl()),
+                activity.buildUpdatedAt() == null ? "" : activity.buildUpdatedAt().toString(),
                 activity.occurredAt() == null ? "" : activity.occurredAt().toString());
     }
 

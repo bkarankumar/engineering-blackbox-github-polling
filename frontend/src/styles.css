@@ -450,6 +450,64 @@ h1 {
     font-size: 10px;
 }
 
+.build-badge {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 4px 0 10px;
+    padding: 9px 11px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    text-decoration: none;
+    font-size: 11px;
+    line-height: 1.2;
+    min-width: 150px;
+}
+
+.build-badge span:first-child {
+    color: inherit;
+    opacity: 0.8;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+.build-badge strong {
+    color: inherit;
+    font-size: 13px;
+}
+
+.build-badge span:last-child {
+    color: inherit;
+    opacity: 0.78;
+    font-size: 10px;
+}
+
+.build-passing {
+    color: #92efbf;
+    border-color: #244935;
+    background: rgba(20, 51, 36, 0.72);
+}
+
+.build-failing {
+    color: #ffb4be;
+    border-color: #6b3543;
+    background: rgba(70, 20, 31, 0.72);
+}
+
+.build-running {
+    color: #f7de9a;
+    border-color: #6f5631;
+    background: rgba(72, 53, 16, 0.72);
+}
+
+.build-unknown {
+    color: #b6bfd0;
+    border-color: #353f50;
+    background: rgba(21, 28, 40, 0.72);
+}
+
 .activity-actions {
     margin-top: 12px;
 }

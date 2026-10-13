@@ -74,6 +74,13 @@ export GITHUB_REPOSITORIES="your-org/identity-service,your-org/billing-service"
 ./gradlew bootRun
 ```
 
+If your machine has Node/npm installed in a non-standard location and Gradle still cannot find `npm`, set `NPM_BIN` before running Gradle:
+
+```bash
+export NPM_BIN="$(which npm)"
+./gradlew bootRun
+```
+
 Open:
 
 ```text

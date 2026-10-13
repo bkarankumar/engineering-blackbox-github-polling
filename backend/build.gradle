@@ -27,19 +27,69 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }
 
+def isWindows = System.getProperty('os.name').toLowerCase().contains('windows')
+def frontendPath = [
+        System.getenv('PATH'),
+        '/opt/homebrew/bin',
+        '/usr/local/bin',
+        '/usr/bin',
+        '/bin'
+].findAll { it != null && !it.isBlank() }
+        .join(File.pathSeparator)
+
+def npmExecutableName = isWindows ? 'npm.cmd' : 'npm'
+def frontendEnv = [PATH: frontendPath]
+
+def resolveNpmExecutable = {
+    def overridden = System.getenv('NPM_BIN')
+    if (overridden != null && !overridden.isBlank()) {
+        return overridden
+    }
+
+    return frontendPath
+            .split(java.util.regex.Pattern.quote(File.pathSeparator))
+            .findResult { dir ->
+                if (dir == null || dir.isBlank()) {
+                    return null
+                }
+
+                def candidate = new File(dir, npmExecutableName)
+                candidate.exists() ? candidate.absolutePath : null
+            }
+}
+
+def npmExecutable = resolveNpmExecutable()
+
+def shellQuote = { String value ->
+    "'${value.replace("'", "'\"'\"'")}'"
+}
+
+def configureNpmExec = { Exec task, List<String> npmArgs ->
+    task.workingDir file('../frontend')
+    task.environment frontendEnv
+
+    if (npmExecutable != null) {
+        task.commandLine npmExecutable, *npmArgs
+    } else if (isWindows) {
+        task.commandLine 'cmd', '/c', ([npmExecutableName] + npmArgs).join(' ')
+    } else {
+        def quotedPath = frontendPath.replace("\\", "\\\\").replace('"', '\\"')
+        def quotedArgs = npmArgs.collect(shellQuote).join(' ')
+        task.commandLine '/bin/sh', '-lc', "PATH=\"${quotedPath}\" npm ${quotedArgs}"
+    }
+}
+
 tasks.named('test') {
     useJUnitPlatform()
 }
 
 tasks.register('installFrontendDeps', Exec) {
-    workingDir '../frontend'
-    commandLine 'npm', 'ci'
+    configureNpmExec(delegate, ['ci'])
 }
 
 tasks.register('buildFrontend', Exec) {
     dependsOn 'installFrontendDeps'
-    workingDir '../frontend'
-    commandLine 'npm', 'run', 'build'
+    configureNpmExec(delegate, ['run', 'build'])
 }
 
 tasks.named('processResources') {

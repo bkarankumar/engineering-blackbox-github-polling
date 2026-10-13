@@ -102,6 +102,11 @@ class BlackboxApplicationTests {
                 "https://github.com/org/repo/pull/" + prNumber,
                 "feat: add change " + prNumber,
                 null,
+                null,
+                null,
+                null,
+                null,
+                null,
                 "Pull request " + action,
                 Instant.parse("2026-01-01T00:00:00Z").plusSeconds(prNumber)
         );
